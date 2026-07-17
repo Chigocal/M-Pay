@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Unit test / coverage reports
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Environments and Secrets
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Local SQLite Database files
+*.db
+*.db-journal
+airtime_cash.db
+
+# OS-specific
+Thumbs.db
+db
+Desktop.ini
+.DS_Store
+
+# IDE / Editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# PDF documents
+*.pdf
