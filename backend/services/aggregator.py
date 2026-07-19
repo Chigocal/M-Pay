@@ -53,7 +53,8 @@ async def _send_request(method: str, path: str, payload: Dict[str, Any], require
     if require_auth:
         headers["Authorization"] = f"Bearer {settings.AGGREGATOR_API_KEY}"
         
-    logger.info(f"Sending {method} request to aggregator URL: {url} with payload keys: {list(payload.keys())}")
+    print(f"DEBUG REQUEST - Authorization: {headers.get('Authorization')}")
+    print(f"DEBUG REQUEST - URL: {url} | Payload: {payload}")
     
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -91,9 +92,8 @@ async def _send_request(method: str, path: str, payload: Dict[str, Any], require
     code = response_data.get("code")
     message = response_data.get("message", "No response message provided.")
     
-    # 2000 is successful. We also allow 5030 for check quota success if message says Available.
-    # We raise custom exception for other error codes
-    if code is not None and code not in (2000, 5030):
+    # Only 2000 is globally allowed. If code is anything else, raise AggregatorException
+    if code is not None and code != 2000:
         logger.warning(f"Aggregator returned business logic failure: Code {code} - {message}")
         raise AggregatorException(code=code, message=message, details=response_data)
         
@@ -103,26 +103,26 @@ async def _send_request(method: str, path: str, payload: Dict[str, Any], require
 async def generate_otp(network: str, phone_number: str) -> Dict[str, Any]:
     """
     Generate an OTP verification request for the sender's phone number on a network.
-    Endpoint: POST /api/v1/generate/otp (does not require Bearer token headers)
+    Endpoint: POST /api/v1/generate/otp (requires Bearer token headers in live environments)
     """
     payload = {
         "networkName": network.upper(),
         "sender": phone_number
     }
-    return await _send_request("POST", "/api/v1/generate/otp", payload, require_auth=False)
+    return await _send_request("POST", "/api/v1/generate/otp", payload, require_auth=True)
 
 
 async def verify_otp(network: str, phone_number: str, otp: str) -> Dict[str, Any]:
     """
     Verify the OTP code received via SMS on the sender's phone number.
-    Endpoint: POST /api/v1/verify/otp (does not require Bearer token headers)
+    Endpoint: POST /api/v1/verify/otp (requires Bearer token headers in live environments)
     """
     payload = {
         "networkName": network.upper(),
         "sender": phone_number,
         "otp": otp
     }
-    return await _send_request("POST", "/api/v1/verify/otp", payload, require_auth=False)
+    return await _send_request("POST", "/api/v1/verify/otp", payload, require_auth=True)
 
 
 async def login_with_session_id(network: str, phone_number: str, session_id: str) -> Dict[str, Any]:
@@ -151,19 +151,14 @@ async def check_quota_availability(network: str, amount: int) -> bool:
     try:
         response = await _send_request("POST", "/api/v1/check/quota/availability", payload, require_auth=True)
         code = response.get("code")
-        message = response.get("message", "")
-        
-        # In the documentation: 
-        # Page 7 Success Response lists code 5030 and message "Recipient(s) Available"
-        # Page 2 lists 5030 as recipient unavailable.
-        # We check if code is 2000, or code is 5030 and "available" is present in message (case-insensitive).
-        if code == 2000 or (code == 5030 and "available" in message.lower()):
+        if code == 2000:
             return True
         return False
         
     except AggregatorException as e:
-        # If aggregator raised an exception (e.g. 5030 meaning unavailable in some cases)
-        # we log and return False instead of crashing the flow.
+        # Check if e.code == 5030 AND the word "available" is present in e.message.lower()
+        if e.code == 5030 and "available" in e.message.lower():
+            return True
         logger.info(f"Quota check exception caught (treating as unavailable): {e}")
         return False
 
