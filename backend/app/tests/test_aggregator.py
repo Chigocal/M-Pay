@@ -3,7 +3,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 from backend.services.aggregator import (
     get_conversion_rate,
-    check_quota,
+    check_quota_availability,
     transfer_airtime,
     AggregatorException,
 )
@@ -31,7 +31,7 @@ async def test_check_quota_success_2000(httpx_mock: HTTPXMock):
         url=f"{settings.AGGREGATOR_BASE_URL.rstrip('/')}/api/v1/check/quota/availability",
         json={"code": 2000, "message": "Recipient(s) Available"}
     )
-    result = await check_quota("MTN", 1000)
+    result = await check_quota_availability("MTN", 1000)
     assert result is True
 
 
@@ -45,7 +45,7 @@ async def test_check_quota_success_5030(httpx_mock: HTTPXMock):
         url=f"{settings.AGGREGATOR_BASE_URL.rstrip('/')}/api/v1/check/quota/availability",
         json={"code": 5030, "message": "Recipient(s) Available"}
     )
-    result = await check_quota("MTN", 1000)
+    result = await check_quota_availability("MTN", 1000)
     assert result is True
 
 
@@ -59,7 +59,7 @@ async def test_check_quota_failure_3000(httpx_mock: HTTPXMock):
         url=f"{settings.AGGREGATOR_BASE_URL.rstrip('/')}/api/v1/check/quota/availability",
         json={"code": 3000, "message": "No recipient available"}
     )
-    result = await check_quota("MTN", 1000)
+    result = await check_quota_availability("MTN", 1000)
     assert result is False
 
 
@@ -99,7 +99,7 @@ async def test_transfer_airtime_success(httpx_mock: HTTPXMock):
     assert result["code"] == 2000
     assert result["data"]["amountConverted"] == "₦1000"
 
-    # Verify requests details sent to mock
+    # Verify request details sent to mock
     request = httpx_mock.get_request()
     assert request is not None
     assert request.headers["authorization"] == f"Bearer {settings.AGGREGATOR_API_KEY}"
