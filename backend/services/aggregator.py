@@ -147,20 +147,15 @@ async def check_quota_availability(network: str, amount: int) -> bool:
         "networkName": network.upper(),
         "amount": int(amount)
     }
-    
     try:
         response = await _send_request("POST", "/api/v1/check/quota/availability", payload, require_auth=True)
-        code = response.get("code")
-        if code == 2000:
-            return True
-        return False
-        
+        return response.get("code") == 2000
     except AggregatorException as e:
-        # Check if e.code == 5030 AND the word "available" is present in e.message.lower()
         if e.code == 5030 and "available" in e.message.lower():
             return True
-        logger.info(f"Quota check exception caught (treating as unavailable): {e}")
-        return False
+        if e.code == 3000:
+            return False
+        raise
 
 
 async def transfer_airtime(

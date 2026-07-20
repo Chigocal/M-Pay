@@ -6,22 +6,36 @@ from backend.app.config import settings
 from backend.app import models
 from backend.routers import auth
 from backend.routers import conversions
+from backend.routers import data_conversions
 from backend.routers import withdrawals
+from backend.routers import payouts
 from backend.routers import webhooks
 
 # Automatically generate database tables on startup
 Base.metadata.create_all(bind=engine)
+
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="Airtime-to-Cash API",
     version="1.0.0"
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 print("DEVELOPER INFO - ACTIVE AGGREGATOR_API_KEY:", settings.AGGREGATOR_API_KEY)
 
 app.include_router(auth.router)
 app.include_router(conversions.router)
+app.include_router(data_conversions.router)
 app.include_router(withdrawals.router)
+app.include_router(payouts.router)
 app.include_router(webhooks.router)
 
 @app.get("/", tags=["Health"])

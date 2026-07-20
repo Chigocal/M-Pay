@@ -1,3 +1,4 @@
+from typing import Optional
 import os
 import sys
 from pathlib import Path
@@ -64,6 +65,28 @@ class Settings(BaseSettings):
     # JWT Secrets
     JWT_SECRET_KEY: str = Field(
         description="Secret key used for signing JWT access tokens"
+    )
+    
+    # SMTP configuration for real email OTPs
+    SMTP_HOST: str = Field(
+        default="smtp.gmail.com",
+        description="SMTP server host name"
+    )
+    SMTP_PORT: int = Field(
+        default=587,
+        description="SMTP server port number"
+    )
+    SMTP_USER: Optional[str] = Field(
+        default=None,
+        description="SMTP server username"
+    )
+    SMTP_PASSWORD: Optional[str] = Field(
+        default=None,
+        description="SMTP server password"
+    )
+    SMTP_FROM: Optional[str] = Field(
+        default=None,
+        description="SMTP sender email address"
     )
     
     model_config = SettingsConfigDict(

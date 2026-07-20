@@ -8,11 +8,12 @@ logger = logging.getLogger(__name__)
 
 try:
     from backend.app.database import get_db
-    from backend.app import models
+    from backend.app import models, schemas
     from backend.app.config import settings
 except ImportError:
     from app.database import get_db
     import app.models as models
+    import app.schemas as schemas
     from app.config import settings
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
@@ -124,3 +125,125 @@ async def monnify_webhook(
         logger.info(f"Transaction {reference} received unhandled status update: {event_status}")
         
     return {"status": "success", "reference": reference, "updated_status": transaction.status}
+
+
+def verify_persona_signature(raw_body: bytes, signature_header: str, secret: str) -> bool:
+    """
+    Verify the Persona webhook signature using HMAC-SHA256.
+    """
+    if not secret or not signature_header:
+        return False
+    try:
+        # Signature header format: "t=TIMESTAMP,v1=SIGNATURE"
+        parts = dict(part.split('=') for part in signature_header.split(','))
+        timestamp = parts.get('t')
+        received_sig = parts.get('v1')
+        if not timestamp or not received_sig:
+            return False
+        
+        # Message construction: <timestamp>.<raw_body>
+        message = f"{timestamp}.{raw_body.decode('utf-8')}".encode('utf-8')
+        
+        calculated = hmac.new(
+            key=secret.encode("utf-8"),
+            msg=message,
+            digestmod=hashlib.sha256
+        ).hexdigest()
+        
+        return hmac.compare_digest(calculated, received_sig)
+    except Exception as e:
+        logger.error(f"Error validating Persona signature: {e}")
+        return False
+
+
+@router.post("/persona")
+async def persona_webhook(
+    payload: schemas.PersonaWebhookPayload,
+    request: Request,
+    persona_signature: str = Header(None, alias="Persona-Signature"),
+    db: Session = Depends(get_db)
+):
+    """
+    Webhook listener for Persona KYC status updates.
+    """
+    body_bytes = await request.body()
+    
+    # 1. Signature verification
+    is_sandbox = "sandbox" in settings.PERSONA_API_KEY.lower()
+    
+    if not persona_signature:
+        if is_sandbox:
+            logger.warning("Persona-Signature header missing in sandbox. Skipping verification.")
+        else:
+            logger.error("Missing Persona-Signature header in production.")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing Persona-Signature header"
+            )
+    else:
+        if not verify_persona_signature(body_bytes, persona_signature, settings.PERSONA_WEBHOOK_SECRET):
+            if is_sandbox:
+                logger.warning("Persona signature verification failed but in Sandbox. Proceeding anyway.")
+            else:
+                logger.error("Persona signature verification failed.")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid signature"
+                )
+                
+    # 2. Parse JSON payload (already parsed and validated by FastAPI, but we keep the structure for compatibility)
+    event_data = payload.data
+    event_attributes = event_data.attributes
+    event_name = event_attributes.name
+    
+    logger.info(f"Received Persona webhook event: {event_name}")
+    
+    # Process inquiry.completed event
+    if event_name == "inquiry.completed":
+        inquiry_data = event_attributes.payload.data
+        inquiry_id = inquiry_data.id
+        inquiry_attributes = inquiry_data.attributes
+        reference_id = inquiry_attributes.reference_id
+        inquiry_status = inquiry_attributes.status
+        
+        logger.info(f"Processing completed inquiry {inquiry_id} for user reference {reference_id} with status {inquiry_status}")
+        
+        # Look up the user by reference_id first
+        user = None
+        if reference_id:
+            try:
+                user = db.query(models.User).filter(models.User.id == int(reference_id)).first()
+            except ValueError:
+                pass
+                
+        # Fallback: look up by persona_inquiry_id
+        if not user:
+            user = db.query(models.User).filter(models.User.persona_inquiry_id == inquiry_id).first()
+            
+        if not user:
+            logger.error(f"User not found for Persona inquiry {inquiry_id} (ref: {reference_id})")
+            return {"status": "ignored", "detail": "User not found"}
+            
+        # Update user verification fields if successfully completed
+        if inquiry_status.lower() == "completed":
+            fields = inquiry_attributes.fields
+            first_name = ""
+            last_name = ""
+            if fields:
+                if fields.name_first:
+                    first_name = fields.name_first.get("value", "")
+                if fields.name_last:
+                    last_name = fields.name_last.get("value", "")
+            
+            full_name = f"{first_name} {last_name}".strip()
+            
+            user.is_verified = True
+            if full_name:
+                user.verified_legal_name = full_name
+            user.persona_inquiry_id = inquiry_id
+            
+            db.commit()
+            db.refresh(user)
+            logger.info(f"User {user.id} verified successfully via Persona. Legal Name: {user.verified_legal_name}")
+            
+    return {"status": "success", "event": event_name}

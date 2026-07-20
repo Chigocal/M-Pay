@@ -1,5 +1,8 @@
 import random
 import jwt
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -84,19 +87,88 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     return user
 
 
+def send_email_otp(email: str, otp: str):
+    """
+    Sends verification OTP to the user's email address.
+    If SMTP details are not configured, it simulates sending by printing to console.
+    """
+    if not settings.SMTP_USER or not settings.SMTP_PASSWORD or "your_email" in settings.SMTP_USER or "your_app_password" in settings.SMTP_PASSWORD:
+        print("\n" + "="*80)
+        print(f" [SMTP SIMULATION] OTP Code for {email} is: {otp}")
+        print(" (To send real emails, replace placeholder variables in .env)")
+        print("="*80 + "\n")
+        return
+    
+    sender_email = settings.SMTP_FROM or settings.SMTP_USER
+    receiver_email = email
+    
+    message = MIMEMultipart("alternative")
+    message["Subject"] = "Verify your Data2Cash Account"
+    message["From"] = sender_email
+    message["To"] = receiver_email
+    
+    text = f"Your verification code is: {otp}\nThis code will expire in 10 minutes."
+    html = f"""\
+    <html>
+      <body style="font-family: Arial, sans-serif; background-color: #030F07; color: #F0FAF0; padding: 20px;">
+        <h2 style="color: #AAFF45;">Verify your Data2Cash Account</h2>
+        <p>Thank you for signing up with Data2Cash. Please use the verification code below to complete your registration:</p>
+        <div style="background-color: #0C2318; border: 1px solid #143324; padding: 15px; text-align: center; border-radius: 10px; margin: 20px 0;">
+          <span style="font-size: 32px; font-weight: bold; color: #AAFF45; letter-spacing: 5px;">{otp}</span>
+        </div>
+        <p style="font-size: 12px; color: #5A8870;">This code is valid for 10 minutes. If you did not request this code, please ignore this email.</p>
+      </body>
+    </html>
+    """
+    
+    message.attach(MIMEText(text, "plain"))
+    message.attach(MIMEText(html, "html"))
+    
+    try:
+        print(f"\n[SMTP CONNECTING] Connecting to {settings.SMTP_HOST}:{settings.SMTP_PORT} using {sender_email}...")
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+            server.starttls()
+            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.sendmail(sender_email, receiver_email, message.as_string())
+        print("\n" + "="*80)
+        print(f" [SMTP SUCCESS] Verification email sent successfully to: {email}")
+        print("="*80 + "\n")
+    except Exception as e:
+        print("\n" + "!"*80)
+        print(f" [SMTP FAILURE] Failed to send verification email to {email}: {e}")
+        print(f" [SMTP FALLBACK] Printing code here to bypass: {otp}")
+        print("!"*80 + "\n")
+
+
 @router.post("/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
 def register(user_data: schemas.UserCreate, db: Session = Depends(get_db)):
     """
     Register a new local user with email, phone number, and password.
-    Verifies that duplicates do not exist.
+    Verifies that duplicates do not exist unless the existing user is unverified,
+    in which case we resend the OTP.
     """
+    hashed_password = pwd_context.hash(user_data.password)
+
     # Check if email is already registered
     existing_email = db.query(models.User).filter(models.User.email == user_data.email).first()
     if existing_email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email address is already registered."
-        )
+        if existing_email.is_verified:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email address is already registered."
+            )
+        else:
+            # Update existing unverified user registration and generate new OTP
+            otp = str(random.randint(100000, 999999))
+            existing_email.otp_code = otp
+            existing_email.otp_expiry = datetime.utcnow() + timedelta(minutes=10)
+            existing_email.hashed_password = hashed_password
+            existing_email.phone_number = user_data.phone_number
+            
+            send_email_otp(existing_email.email, otp)
+            db.commit()
+            db.refresh(existing_email)
+            return existing_email
 
     # Check if phone number is already registered
     existing_phone = db.query(models.User).filter(models.User.phone_number == user_data.phone_number).first()
@@ -107,7 +179,6 @@ def register(user_data: schemas.UserCreate, db: Session = Depends(get_db)):
         )
 
     # Create new user record
-    hashed_password = pwd_context.hash(user_data.password)
     new_user = models.User(
         email=user_data.email,
         phone_number=user_data.phone_number,
@@ -121,8 +192,8 @@ def register(user_data: schemas.UserCreate, db: Session = Depends(get_db)):
     new_user.otp_code = otp
     new_user.otp_expiry = datetime.utcnow() + timedelta(minutes=10)
     
-    # Print simulated email OTP to console
-    print(f"SIMULATED EMAIL: OTP for {new_user.email} is {otp}")
+    # Send verification email
+    send_email_otp(new_user.email, otp)
     
     db.add(new_user)
     db.commit()
