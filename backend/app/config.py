@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     MONNIFY_CONTRACT_CODE: str = Field(
         description="Monnify Contract Code"
     )
+    MONNIFY_WALLET_ACCOUNT_NUMBER: str = Field(
+        default="9999999999",
+        description="Monnify Source Wallet Account Number"
+    )
     
     # Persona Credentials
     PERSONA_API_KEY: str = Field(
