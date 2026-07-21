@@ -160,10 +160,43 @@ def test_initiate_conversion_success(httpx_mock: HTTPXMock, db_session):
     assert txn.type == "CONVERSION"
 
 
-def test_verify_conversion_success(httpx_mock: HTTPXMock, db_session, test_user):
+def test_verify_otp_success(httpx_mock: HTTPXMock, db_session):
     """
-    Verify successful verification completes the transaction, transfers airtime,
-    and updates the user's wallet balance.
+    Verify that verify-otp successfully calls the aggregator to verify the OTP and returns session details.
+    """
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{settings.AGGREGATOR_BASE_URL.rstrip('/')}/api/v1/verify/otp",
+        json={
+            "code": 2000,
+            "message": "Otp verified.",
+            "data": {
+                "sessionId": "mock_session_123",
+                "airtimeBalance": "₦228.69"
+            }
+        }
+    )
+
+    response = client.post(
+        "/conversions/verify-otp",
+        json={
+            "network": "MTN",
+            "phone_number": "08061234567",
+            "otp": "123456"
+        }
+    )
+    
+    assert response.status_code == 200
+    res_data = response.json()
+    assert res_data["status"] == "success"
+    assert res_data["session_id"] == "mock_session_123"
+    assert res_data["airtime_balance"] == "₦228.69"
+
+
+def test_execute_transfer_success(httpx_mock: HTTPXMock, db_session, test_user):
+    """
+    Verify that execute-transfer successfully triggers airtime transfer on the aggregator,
+    saves the transaction with pending reconciliation status, and schedules background verification.
     """
     # Create matching pending transaction in database
     txn = models.Transaction(
@@ -177,50 +210,38 @@ def test_verify_conversion_success(httpx_mock: HTTPXMock, db_session, test_user)
     )
     db_session.add(txn)
     db_session.commit()
-    
-    # Mock OTP verification response
-    httpx_mock.add_response(
-        method="POST",
-        url=f"{settings.AGGREGATOR_BASE_URL.rstrip('/')}/api/v1/verify/otp",
-        json={
-            "code": 2000,
-            "message": "Otp verified.",
-            "data": {
-                "sessionId": "mock_session_123"
-            }
-        }
-    )
-    
-    # Mock transfer completion response
+
+    # Mock aggregator transfer endpoint response
     httpx_mock.add_response(
         method="POST",
         url=f"{settings.AGGREGATOR_BASE_URL.rstrip('/')}/api/v1/transfer/airtime",
         json={
             "code": 2000,
-            "message": "Transfer completed successfully."
+            "message": "Transfer initiated successfully."
         }
     )
-    
+
     response = client.post(
-        "/conversions/verify",
+        "/conversions/execute-transfer",
         json={
             "network": "MTN",
             "phone_number": "08061234567",
             "amount": 1000,
-            "otp": "123456",
-            "pin": "1111"
+            "pin": "1111",
+            "session_id": "mock_session_123",
+            "initial_balance": 1500.0
         }
     )
-    
+
     assert response.status_code == 200
     res_data = response.json()
-    assert res_data["status"] == "success"
+    assert res_data["status"] == "pending_reconciliation"
     assert "reference" in res_data
     assert res_data["payout_amount"] == 800.0  # 1000 * 0.8 rate
-    assert res_data["new_wallet_balance"] == 900.0  # 100.0 starting balance + 800.0 net payout
     
-    # Verify transaction states in database
+    # Verify transaction updates in database
     db_session.refresh(txn)
-    assert txn.status == "COMPLETED"
     assert txn.net_payout == 800.0
     assert txn.aggregator_session_id == "mock_session_123"
+    assert txn.status == "PENDING"  # Starts as PENDING before background reconciliation completes
+

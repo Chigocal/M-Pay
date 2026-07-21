@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+sqlalchemy
+pydantic>=2.0.0
+pydantic-settings
+email-validator
+httpx
+passlib[bcrypt]
+pyjwt
+google-auth
+cryptography
+pytest
+pytest-httpx

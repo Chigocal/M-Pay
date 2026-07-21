@@ -31,6 +31,7 @@ import {
   FundWalletCard,
   FundWalletSuccess,
   WithdrawFlow,
+  WithdrawSuccess,
 } from "./screens/Wallet";
 import { History, Settings, Beneficiaries } from "./screens/Other";
 import { LogIn, SignUp } from "./screens/Auth";
@@ -128,6 +129,7 @@ export default function App() {
         {screen === "fund-wallet-card" && <FundWalletCard {...props} />}
         {screen === "fund-wallet-success" && <FundWalletSuccess {...props} />}
         {screen === "withdraw" && <WithdrawFlow {...props} />}
+        {screen === "withdraw-success" && <WithdrawSuccess {...props} />}
 
         {/* ── Other ── */}
         {screen === "history" && <History {...props} />}

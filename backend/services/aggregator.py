@@ -151,7 +151,7 @@ async def check_quota_availability(network: str, amount: int) -> bool:
         response = await _send_request("POST", "/api/v1/check/quota/availability", payload, require_auth=True)
         return response.get("code") == 2000
     except AggregatorException as e:
-        if e.code == 5030 and "available" in e.message.lower():
+        if e.code == 5030 and "available" in e.message.lower() and "unavailable" not in e.message.lower():
             return True
         if e.code == 3000:
             return False

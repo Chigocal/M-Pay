@@ -251,7 +251,9 @@ export function WithdrawFlow({ go, state, setState }: ScreenProps) {
               <select
                 value={selectedBank?.bankCode ?? ""}
                 onChange={(e) => {
-                  const chosen = banks.find((bank) => bank.bankCode === e.target.value);
+                  const chosen = banks.find(
+                    (bank) => bank.bankCode === e.target.value,
+                  );
                   setSelectedBank(chosen ?? null);
                 }}
                 className="w-full px-4 py-3.5 rounded-xl text-[14px] outline-none"
@@ -1004,3 +1006,137 @@ export function FundWalletSuccess({ go, state, setState }: ScreenProps) {
     </div>
   );
 }
+
+// ─── WithdrawSuccess ──────────────────────────────────────────────────────────
+
+export function WithdrawSuccess({ go, state, setState }: ScreenProps) {
+  const lastWithdrawal = state.lastWithdrawal;
+  const amount = lastWithdrawal?.amount ?? 0;
+  const bankName = lastWithdrawal?.bankName ?? "";
+  const accountNumber = lastWithdrawal?.accountNumber ?? "";
+  const accountName = lastWithdrawal?.accountName ?? "";
+  const reference = lastWithdrawal?.reference ?? "";
+  const txId = reference || genTxId();
+
+  useEffect(() => {
+    setState((s) => {
+      // Avoid duplicate transaction addition
+      if (s.transactions.some((t) => t.id === txId)) {
+        return s;
+      }
+      return {
+        ...s,
+        transactions: [
+          {
+            id: txId,
+            date: new Date().toLocaleDateString("en-NG", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            }),
+            type: "withdraw" as const,
+            status: "completed" as const,
+            amount,
+            bank: bankName,
+          },
+          ...s.transactions,
+        ],
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div
+      className="flex flex-col min-h-screen animate-fade-in"
+      style={{ background: "#030F07", color: "#F0FAF0" }}
+    >
+      <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
+        <div className="relative flex items-center justify-center mb-8">
+          <div
+            className="absolute w-36 h-36 rounded-full animate-pulse-ring"
+            style={{ background: "rgba(170,255,69,0.1)" }}
+          />
+          <div
+            className="w-24 h-24 rounded-full flex items-center justify-center"
+            style={{
+              background: "rgba(170,255,69,0.1)",
+              border: "1.5px solid rgba(170,255,69,0.3)",
+              boxShadow: "0 0 60px rgba(170,255,69,0.12)",
+            }}
+          >
+            <IconCheckCircle size={44} />
+          </div>
+        </div>
+
+        <p
+          className="text-[11px] font-bold tracking-[0.2em] uppercase mb-3"
+          style={{ color: "#AAFF45" }}
+        >
+          Withdrawal Successful
+        </p>
+        <p className="text-[48px] font-extrabold leading-none mb-2 shimmer-text">
+          {fmt(amount)}
+        </p>
+        <p className="text-[15px] mb-1" style={{ color: "#7AAD8A" }}>
+          disbursed from wallet
+        </p>
+        <p className="text-[13px] mb-8" style={{ color: "#5A8870" }}>
+          to {bankName} • {accountNumber.slice(-4).padStart(accountNumber.length, "•")}
+        </p>
+
+        <div
+          className="w-full p-4 rounded-2xl text-left"
+          style={{
+            background: "#0C2318",
+            border: "1px solid rgba(170,255,69,0.09)",
+          }}
+        >
+          {[
+            { label: "Beneficiary", value: accountName },
+            { label: "Bank", value: bankName },
+            { label: "Account Number", value: accountNumber },
+            { label: "Transaction ID", value: txId, lime: true },
+            { label: "Date & time", value: new Date().toLocaleString("en-NG") },
+            {
+              label: "New wallet balance",
+              value: fmt(state.walletBalance),
+              lime: true,
+            },
+          ].map(({ label, value, lime }, i, arr) => (
+            <div
+              key={label}
+              className="flex items-center justify-between"
+              style={{
+                paddingBottom: i < arr.length - 1 ? "10px" : 0,
+                marginBottom: i < arr.length - 1 ? "10px" : 0,
+                borderBottom:
+                  i < arr.length - 1
+                    ? "1px solid rgba(170,255,69,0.06)"
+                    : "none",
+              }}
+            >
+              <span className="text-[12px]" style={{ color: "#5A8870" }}>
+                {label}
+              </span>
+              <span
+                className="text-[12px] font-semibold text-right max-w-[65%]"
+                style={{
+                  fontFamily: "DM Mono, monospace",
+                  color: lime ? "#AAFF45" : "#F0FAF0",
+                }}
+              >
+                {value}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="px-6 pb-10 flex flex-col gap-3">
+        <PrimaryBtn label="Back to Dashboard" onClick={() => go("dashboard")} />
+      </div>
+    </div>
+  );
+}
+
