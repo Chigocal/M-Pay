@@ -1,5 +1,6 @@
 import uuid
 import asyncio
+import re
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from pydantic import BaseModel, Field
@@ -168,6 +169,12 @@ async def verify_conversion_otp(
                 detail="Verification failed. Aggregator session ID was not generated."
             )
 
+        parsed_initial_balance = _parse_balance(airtime_balance)
+        print(
+            f"[OTP VERIFY] network={request.network} phone={request.phone_number} "
+            f"raw_airtime_balance={airtime_balance} parsed_airtime_balance={parsed_initial_balance}"
+        )
+
         return {
             "status": "success",
             "message": "OTP verified successfully.",
@@ -180,6 +187,29 @@ async def verify_conversion_otp(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=e.message
         )
+
+
+def _parse_balance(value: Optional[object]) -> Optional[float]:
+    """Normalize balance strings such as '₦228.69' or '228.69' into a float."""
+    if value is None:
+        return None
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        normalized = re.sub(r"[^0-9.\-]", "", text)
+        if not normalized or normalized in {"-", "."}:
+            return None
+        try:
+            return float(normalized)
+        except ValueError:
+            return None
+
+    return None
 
 
 async def verify_sim_debit(
@@ -212,7 +242,13 @@ async def verify_sim_debit(
         if db_transaction.status != "PENDING":
             return
 
+        parsed_initial_balance = _parse_balance(initial_balance)
+        expected_min_balance = None
+        if parsed_initial_balance is not None:
+            expected_min_balance = parsed_initial_balance - amount
+
         debit_confirmed = False
+        last_seen_balance = None
 
         for attempt in range(5):
             try:
@@ -224,24 +260,22 @@ async def verify_sim_debit(
 
                 data = login_response.get("data", {})
                 current_balance = data.get("airtimeBalance")
+                parsed_balance = _parse_balance(current_balance)
+                last_seen_balance = parsed_balance
 
-                if current_balance is not None:
-                    balance_text = str(current_balance).replace("₦", "").replace(",", "").strip()
-                    try:
-                        current_balance = float(balance_text)
-                    except ValueError:
-                        print(f"[RECONCILIATION ATTEMPT {attempt + 1}] Unable to parse balance value: {current_balance}")
-                        current_balance = None
+                print(
+                    f"[RECONCILIATION ATTEMPT {attempt + 1}] raw_balance={current_balance} "
+                    f"parsed_balance={parsed_balance} expected_min_balance={expected_min_balance}"
+                )
 
-                    if current_balance is not None:
-                        if initial_balance is not None:
-                            expected_max_balance = initial_balance - (amount * 0.9)
-                            if current_balance <= expected_max_balance:
-                                debit_confirmed = True
-                                break
-                        else:
+                if parsed_balance is not None:
+                    if expected_min_balance is not None:
+                        if parsed_balance <= expected_min_balance:
                             debit_confirmed = True
                             break
+                    elif parsed_initial_balance is not None and parsed_balance < parsed_initial_balance:
+                        debit_confirmed = True
+                        break
 
             except Exception as api_err:
                 print(f"[RECONCILIATION ATTEMPT {attempt + 1}] API error while checking balance: {api_err}")
@@ -254,11 +288,17 @@ async def verify_sim_debit(
             db_transaction.net_payout = payout_amount
             db_user.wallet_balance += payout_amount
             db.commit()
-            print(f"[RECONCILIATION SUCCESS] Transaction {transaction_id} verified. SIM debited. Wallet credited with ₦{payout_amount}.")
+            print(
+                f"[RECONCILIATION SUCCESS] Transaction {transaction_id} verified. "
+                f"Balance dropped to {last_seen_balance}. Wallet credited with ₦{payout_amount}."
+            )
         else:
             db_transaction.status = "FAILED"
             db.commit()
-            print(f"[RECONCILIATION FAILED] Transaction {transaction_id} failed. SIM balance was not reduced after 5 checks.")
+            print(
+                f"[RECONCILIATION FAILED] Transaction {transaction_id} failed. "
+                f"Balance was not reduced by the expected amount after 5 checks. Last seen balance: {last_seen_balance}."
+            )
 
     finally:
         db.close()
@@ -319,24 +359,34 @@ async def execute_conversion_transfer(
             )
             db.add(db_transaction)
 
-        # 3. Update transaction values
-        db_transaction.status = "COMPLETED"
+        # 3. Update transaction values and keep it pending until reconciliation confirms the balance drop
         db_transaction.net_payout = payout_amount
         db_transaction.aggregator_session_id = request.session_id
 
-        # 4. Update current authenticated user wallet balance
-        current_user.wallet_balance += payout_amount
-
-        # 5. Commit changes
+        # 4. Commit the pending transaction so reconciliation can update it later.
         db.commit()
-        db.refresh(current_user)
+        db.refresh(db_transaction)
+
+        # 5. Schedule background balance reconciliation
+        background_tasks.add_task(
+            verify_sim_debit,
+            current_user.id,
+            db_transaction.id,
+            request.network,
+            request.phone_number,
+            request.session_id,
+            float(request.amount),
+            payout_amount,
+            request.initial_balance
+        )
 
         return {
-            "status": "success",
+            "status": "pending_reconciliation",
             "reference": reference,
             "amount_transferred": request.amount,
             "payout_amount": payout_amount,
             "new_wallet_balance": current_user.wallet_balance,
+            "message": "Reconciliation check in progress. Please check back in a few moments.",
             "transaction_id": db_transaction.id,
             "transaction_status": db_transaction.status
         }

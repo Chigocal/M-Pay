@@ -133,7 +133,16 @@ async def get_supported_banks(
 ):
     try:
         banks = await client.get_supported_banks()
-        return {"status": "success", "banks": banks}
+        # Normalize Monnify response: name → bankName, code → bankCode
+        normalized_banks = [
+            {
+                "bankCode": bank.get("code"),
+                "bankName": bank.get("name"),
+            }
+            for bank in banks
+            if bank.get("code") and bank.get("name")
+        ]
+        return {"status": "success", "banks": normalized_banks}
     except MonnifyException as exc:
         logger.error("Failed to fetch supported banks: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc.message)) from exc
